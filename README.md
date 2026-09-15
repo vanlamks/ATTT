@@ -2,10 +2,9 @@
 # LAB 1 - Bắt gói tin Telnet - SSH
 
 ## 1. Thông tin sinh viên
-
-* * Họ và tên: Trần Văn Lâm
-* *MSSV: 1150080102
-* *Lớp: CNPM2
+Họ và tên: Trần Văn Lâm
+MSSV: 1150080102
+Lớp: CNPM2
 
 ## 2. Tên bài Lab
 
