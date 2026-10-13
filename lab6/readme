@@ -1,0 +1,80 @@
+# LAB 6 - Xác thực Active Directory và chính sách truy cập trên pfSense
+
+Môn: Thực hành An toàn hệ thống thông tin
+
+| Thông tin | Nội dung |
+|---|---|
+| Họ và tên | ........................ |
+| Lớp | ........................ |
+| MSSV | ........................ |
+| Báo cáo | `Lab6_pfSense_BaoCao.docx` |
+| Video demo | [YouTube](https://youtube.com/...) |
+
+## 1. Mục tiêu
+
+Dựng một pfSense riêng cho LAB 6 với bốn interface (WAN, MGMT, LAN, DMZ), làm nền tảng để tích hợp Active Directory qua LDAP, Captive Portal và các chính sách firewall theo IP, port, thời gian.
+
+## 2. Mô hình mạng
+
+| Thiết bị / interface | Địa chỉ | Vai trò |
+|---|---|---|
+| pfSense WAN (em0) | DHCP trên 192.168.250.0/24 (NAT Network `LAB6-WAN`) | Ra Internet |
+| pfSense MGMT (em1) | 192.168.56.254/24 (Host-Only) | WebGUI quản trị |
+| pfSense LAN (em2) | 10.6.0.1/24 (Internal `lab6-lan`) | Gateway LAN-DOMAIN |
+| pfSense DMZ (em3) | 172.16.6.1/24 (Internal `lab6-dmz`) | Gateway DMZ |
+| Máy thật quản trị | 192.168.56.1/24 | Chỉ quản trị pfSense |
+| DC01 | 10.6.0.10/24 | AD DS + DNS, domain `lab6.test` |
+| Client-A | 10.6.0.21/24 | Máy đại diện tài khoản A |
+| Client-B | 10.6.0.22/24 | Máy đại diện tài khoản B |
+| DMZ-WEB | 172.16.6.10/24 (thêm .20/.30/.40) | Web test trong DMZ |
+
+## 3. Cấu hình card mạng máy ảo pfSense
+
+| Adapter | Chế độ | Tên mạng | MAC | Vai trò |
+|---|---|---|---|---|
+| 1 | NAT Network | LAB6-WAN | 08:00:27:39:DC:20 | WAN |
+| 2 | Host-only | VirtualBox Host-Only Ethernet Adapter | 08:00:27:F6:2A:58 | MGMT |
+| 3 | Internal Network | lab6-lan | 08:00:27:96:FA:AD | LAN |
+| 4 | Internal Network | lab6-dmz | 08:00:27:26:58:D3 | DMZ |
+
+Khi gán interface luôn đối chiếu theo địa chỉ MAC, không theo tên `emX`.
+
+## 4. Các bước cài đặt pfSense
+
+1. **VirtualBox:** tạo NAT Network `LAB6-WAN` (192.168.250.0/24, bật DHCP). Đặt card Host-Only trên máy thật là `192.168.56.1/24`, không gateway và không DNS.
+2. **Console, Option 1 (Assign Interfaces):** WAN = em0, LAN = em2, OPT1 = em1, OPT2 = em3.
+3. **Console, Option 2 (Set IP):** đặt IP theo bảng ở mục 2, tắt DHCP server trên LAN, MGMT, DMZ.
+4. **WebGUI:** mở `http://192.168.56.254` từ máy thật, đăng nhập `admin` / `pfsense`.
+5. **Setup Wizard:**
+   - Hostname `pfSense-LAB6`, domain `lab6.test`, DNS `8.8.8.8`.
+   - Timezone `Asia/Ho_Chi_Minh`.
+   - WAN kiểu DHCP, bỏ tick *Block RFC1918 Private Networks* và *Block bogon networks*.
+6. **Interfaces:** bật OPT1 và OPT2, đặt tên lần lượt là `MGMT` và `DMZ`.
+7. **Firewall > Rules > MGMT:** tạo một rule Pass (Protocol Any, Source `MGMT subnets`, Destination Any), Apply Changes.
+8. **Client-A (Windows 11):** Adapter 1 là Internal Network `lab6-lan`, IP tĩnh `10.6.0.21/24`, gateway `10.6.0.1`.
+
+## 5. Kiểm tra
+
+- Từ máy thật: `ping 192.168.56.254` có Reply và mở được WebGUI khi firewall đang bật.
+- Interfaces > Assignments hiển thị đủ WAN, LAN, MGMT, DMZ với đúng MAC.
+
+## 6. Cấu trúc thư mục
+
+```
+.
+├── README.md
+├── Lab6_pfSense_BaoCao.docx   # Báo cáo kèm ảnh minh chứng
+└── config.xml                 # Cấu hình pfSense xuất từ Diagnostics > Backup & Restore
+```
+
+## 7. Lưu ý
+
+- Cấu hình LDAP trong lab dùng TCP/389 chỉ vì mạng lab cô lập; môi trường thật nên dùng LDAP qua TLS/SSL.
+- Không dùng tài khoản Domain Administrator làm LDAP bind, dùng service account quyền thấp (`svc_pfsense_ldap`).
+- pfSense áp policy theo IP, port, interface và schedule, không dùng trực tiếp username LDAP làm điều kiện của firewall rule.
+- Nên đổi mật khẩu admin mặc định nếu dùng ngoài môi trường lab.
+
+## 8. Tài liệu tham khảo
+
+- Netgate, pfSense Documentation: User Management and Authentication, LDAP Authentication Servers, Captive Portal, Firewall Rules, Aliases và Time Based Rules.
+- Microsoft Learn: Active Directory Domain Services và DNS trên Windows Server.
