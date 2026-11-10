@@ -1,0 +1,69 @@
+
+## 0. Phạm vi an toàn bắt buộc
+
+- Chỉ chạy trong các subnet: `10.9.0.0/24` (DNSLAB), `10.10.0.0/24` (ATTACKNET), `172.16.6.0/24` (APP-TEST/DMZ).
+- Domain thử nghiệm: `example.lab10.test` (RFC 2606) — **không** dùng cho website/domain thật.
+- **Không** chạy bất kỳ script nào trong bộ này trên Wi-Fi, mạng trường, mạng doanh nghiệp, Internet hay hệ thống không thuộc quyền quản trị của bạn.
+
+## 1. Thành phần & địa chỉ IP
+
+| Máy | Vai trò | IP |
+|---|---|---|
+| pfSense DNSLAB | Gateway DNS-LAB | 10.9.0.1/24 |
+| DNS-SERVER | BIND9 (baseline) / resolver mô phỏng (attack phase) | 10.9.0.10 |
+| VICTIM | DNS client | 10.9.0.100 |
+| pfSense ATTACKNET | Gateway subnet attacker (mới) | 10.10.0.1/24 |
+| ATTACKER (Kali) | Remote attacker + evil DNS/web | 10.10.0.200 |
+| AUTH-DNS/RELAY (APP-TEST) | DNS hợp lệ + race harness | 172.16.6.20 |
+| DMZ-WEB | Website hợp lệ | 172.16.6.10 |
+
+## 2. Nội dung thư mục `LAB10_Resources/`
+
+```
+01_DNS_SERVER/   named.conf.*.baseline, vuln_resolver_lab10.py   → DNS-SERVER (10.9.0.10)
+02_VICTIM/       README (không cần tạo VM mới, kế thừa LAB 9)
+03_ATTACKER/     evil_dns_lab10.py, fake_index.html, kaminsky_remote_lab10.py → Kali (10.10.0.200)
+04_AUTH_DNS_RELAY/ auth_dns_relay_lab10.py                        → APP-TEST (172.16.6.20)
+05_PFSENSE/      firewall_policy_matrix.csv                       → pfSense rules
+06_WIRESHARK/    filters.txt                                      → display filter tham khảo
+07_REPORT/       LAB10_Report_Template.docx                       → mẫu báo cáo nộp bài
+```
+
+## 3. Trình tự thực hiện (tóm tắt)
+
+1. **Chuẩn bị hạ tầng**: tạo snapshot (`LAB10_START_FROM_LAB9`), thêm interface `ATTACKNET` (10.10.0.1/24, **không** gán Upstream Gateway) trên pfSense, chuyển Kali sang card `attack-net` (10.10.0.200/24, Promiscuous Mode = **Deny**), áp `firewall_policy_matrix.csv`.
+2. **Baseline**: dựng BIND9 trên DNS-SERVER bằng 2 file `.baseline`; chạy `auth_dns_relay_lab10.py` trên APP-TEST; xác nhận từ VICTIM `www.example.lab10.test → 172.16.6.10`.
+3. **Xác nhận tính "remote"**: capture trên Kali trong lúc VICTIM truy vấn — Kali **không được thấy** traffic giữa 10.9.0.10 ↔ 172.16.6.20. Muốn phân tích race phải capture tại DNS-SERVER hoặc APP-TEST.
+4. **Chuyển sang attack phase**: dừng `bind9`, chạy `sudo python3 vuln_resolver_lab10.py` trên DNS-SERVER (resolver mô phỏng, source port cố định 33333).
+5. **Dựng hạ tầng attacker trên Kali** (3 terminal):
+   ```bash
+   # Terminal 1
+   sudo python3 evil_dns_lab10.py
+   # Terminal 2
+   sudo python3 -m http.server 80 --directory <thư_mục_chứa_fake_index.html>
+   # Terminal 3
+   python3 kaminsky_remote_lab10.py
+   ```
+6. **Task 1 — Kaminsky simulation**: `kaminsky_remote_lab10.py` tạo tên ngẫu nhiên, trigger resolver, gửi 16 batch × 4096 TXID tới race relay (UDP/5300 trên 172.16.6.20). Thành công khi thấy `[PENDING]` → `[HIT]` (trên APP-TEST) và `[CACHE] delegation poisoned` (trên DNS-SERVER), script verify in `www.example.lab10.test A = 10.10.0.200`.
+7. **Task 2 — Kiểm tra từ VICTIM**: truy vấn lại domain, xác nhận trả về `10.10.0.200` và mở được Fake Site.
+8. **Khôi phục & hardening**: dừng resolver mô phỏng, khởi động lại `bind9`, kiểm tra `allow-recursion` thu hẹp về `10.9.0.0/24`, quan sát source port của BIND9 ngẫu nhiên (khác với 33333 cố định trước đó).
+9. **Dọn dẹp sau lab**: disable/xoá rule UDP/5300, tắt/gỡ interface ATTACKNET nếu không cần, giữ Kali Promiscuous Mode = Deny.
+
+## 4. Tiêu chí thành công
+
+- AUTH-DNS log có `[PENDING]` và `[HIT]`.
+- DNS-SERVER log có `[CACHE] delegation poisoned`.
+- VICTIM resolve `www.example.lab10.test → 10.10.0.200` sau poison, và `→ 172.16.6.10` ở baseline/sau khi restore.
+- Kali không bao giờ sniff được traffic `10.9.0.10 ↔ 172.16.6.20`.
+
+## 5. Sự cố thường gặp
+
+| Hiện tượng | Nguyên nhân / xử lý |
+|---|---|
+| Victim không resolve baseline | Sai DNS 10.9.0.10, BIND chưa chạy, sai forward zone, hoặc thiếu rule pfSense → 172.16.6.20:53 |
+| Kali thấy traffic DNSLAB | Kali còn card `dns-lab` hoặc Promiscuous Mode chưa Deny |
+| AUTH-DNS không có `[PENDING]` | Resolver mô phỏng chưa chạy, hoặc query không thuộc `example.lab10.test`, hoặc pfSense chặn DNSLAB → AUTH-DNS |
+| Relay không có `[HIT]` | UDP/5300 bị block, sai IP attacker, hoặc race delay quá ngắn so với lúc gửi batch |
+| Poison "thành công" nhưng Victim vẫn ra 172.16.6.10 | Chưa flush cache local trên Victim, hoặc BIND chưa thực sự dừng |
+| BIND không start lại sau lab | `sudo named-checkconf`; xem `journalctl -u bind9 -n 50`; khôi phục file `.baseline/.bak` |
+
